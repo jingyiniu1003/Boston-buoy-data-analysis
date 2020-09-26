@@ -1,0 +1,343 @@
+---
+title: "Boston Buoy Data Analysis"
+author: "Jingyi Niu"
+date: "September 25, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 10, message =F, warning = F)
+```
+
+### Introduction
+In this report, the data collected by a single weather buoy in the NOAA National Data Buoy Center is been studyed in order to find any evidence of global warming.
+
+Two variables are mainly considered in this project:
+
++ ATMP (Air Temperature)
++ WTMP (Water Temperature)
+
+The yearly and monthly average ATMP and WTMP are been calculated to find the trends of temperature according to time.
+
+The plot of trends shows the ATMP and WTMP more or less remain the same for the recent years, and the result of statistical models such as linear regression and Pearson's correlation test also shows there exists NO significant evidence of global warming.
+
+
+### Collect and combine data from NOAA
+
+In this section, Boston Buoy Data from 1987 and 2016 are been collect from the website of NOAA. 
+
+```{r, eval=F}
+### make URLs
+url1 <- "http://www.ndbc.noaa.gov/view_text_file.php?filename=mlrf1h"
+url2 <- ".txt.gz&dir=data/historical/stdmet/"
+years <- c(1987:2016)
+urls <- str_c(url1, years, url2, sep = "")
+filenames <- str_c("mr", years, sep = "")
+
+###  Read the data from the website
+##Initial Y1987-Y1999 
+for (i in 1:13){
+  suppressMessages(  ###  This stops the annoying messages on your screen.  Do this last.
+    assign(filenames[i], read_table(urls[i], col_names = TRUE))
+  )
+  file <- get(filenames[i])
+  colnames(file)[1] <-"YYYY"
+  # put '19' in front of 2 digit years
+  # check that all columns are included
+  # filter down to only the 1 daily observation that you want
+  # etc etc etc
+  if(i == 1){MR <- file}
+  else{MR <- rbind.data.frame(MR, file)}
+}
+
+##Y2000-Y2004 added a variable of 'TIDE'
+for (i in 14:18){
+  suppressMessages(  ###  This stops the annoying messages on your screen.  Do this last.
+    assign(filenames[i], read_table(urls[i], col_names = TRUE))
+  )
+  file <- get(filenames[i])
+  #Y2000-Y2004 added a variable of 'TIDE'
+  file=file[,-16]
+  colnames(file)[1] <-"YYYY"
+  # put '19' in front of 2 digit years
+  # check that all columns are included
+  # filter down to only the 1 daily observation that you want
+  # etc etc etc
+  MR <- rbind.data.frame(MR, file)
+}
+
+##Y2005-Y2006 added a variable of 'mm'
+for (i in 19:20){
+  suppressMessages(  ###  This stops the annoying messages on your screen.  Do this last.
+    assign(filenames[i], read_table(urls[i], col_names = TRUE))
+  )
+  file <- get(filenames[i])
+  #Y2005-Y2006 added a variable of 'mm' 
+  file=file[,-17]
+  file=file[,-5]
+  colnames(file)[1] <-"YYYY"
+  # put '19' in front of 2 digit years
+  # check that all columns are included
+  # filter down to only the 1 daily observation that you want
+  # etc etc etc
+  MR <- rbind.data.frame(MR, file)
+}
+
+## The combined variable of 'WSPD GST' separated into 'WSPD' and 'GSP'
+z=separate(MR,col='WSPD GST',into=c('WSPD','GSP','1','2'),sep='[ ]')
+zGSP=z$GSP==''
+z$GSP[zGSP]=z$'1'[zGSP]
+zGSP=z$GSP==''
+z$GSP[zGSP]=z$'2'[zGSP]
+z=z[,-9]
+z=z[,-8]
+##Y2007 the variable of 'WD', 'WSPD' and 'GST' combined as 'WDIR WSPD GST'
+##(Optional) Y2007 the variable of 'MWD' and 'BAR' combined as 'MWD PRES'
+for (i in 21:30){
+  suppressMessages(  ###  This stops the annoying messages on your screen.  Do this last.
+    assign(filenames[i], read_table(urls[i], col_names = TRUE))
+  )
+    
+  file <- get(filenames[i])
+  #Y2007 added a variable 'WDIR' in 'WDIR WSPD GST'
+  #(Optional) Y2007 the variable of 'MWD' and 'BAR' combined as 'MWD PRES'
+  x=separate(file,col='WDIR WSPD GST',into=c('WDIR','WSPD','GSP','1','2'),sep='[ ]')
+  xWSP=x$WSPD==''
+  x$WSPD[xWSP]=x$GSP[xWSP]
+  x$GSP[xWSP]=x$'1'[xWSP]
+  xGSP=x$GSP==''
+  if (colnames(x)[15]=='MWD'){colnames(x)[15]='BAR'}
+  else{x=separate(x,col='MWD   PRES',into=c('MWD','BAR'),sep='[ ]')}
+  x$GSP[xGSP]=x$'2'[xGSP]
+  x=x[,-20]
+  x=x[,-10]
+  x=x[,-9]
+  x=x[,-5]
+  colnames(x)[5]='WD'
+  x=x[-1,]
+  file=x
+  colnames(file)[1] <-"YYYY"
+  # put '19' in front of 2 digit years
+  # check that all columns are included
+  # filter down to only the 1 daily observation that you want
+  # etc etc etc
+  MR <- rbind.data.frame(MR, file)
+}
+
+##Unified the time format
+MR$YYYY=as.numeric(MR$YYYY)
+MR$YYYY[MR$YYYY<1000]=MR$YYYY[MR$YYYY<1000]+1900
+
+###Save data
+save(MR,file='MR.Rdata')
+```
+
+
+### Data Manipulation
+
+In this section, the following work are been done:
+
++ transform data type
++ combine YYYY, MM, DD, hh into a new variable datetime
++ mark the unusual value to be missing value
++ change variable MM from integer to factor
+
+```{r eval=F}
+load("./MR.Rdata")
+
+# transform data type
+library(tidyverse)
+MR %>% mutate(MM = as.integer(MM),
+              DD = as.integer(DD),
+              hh = as.integer(hh),
+              WD = as.integer(WD),
+              WSPD = as.integer(WSPD),
+              GSP = as.integer(GSP),
+              WVHT = as.integer(WVHT),
+              DPD = as.integer(DPD),
+              APD = as.integer(APD),
+              MWD = as.integer(MWD),
+              BAR = as.integer(BAR),
+              ATMP = as.integer(ATMP),
+              WTMP = as.integer(WTMP),
+              DEWP = as.integer(DEWP),
+              VIS = as.integer(VIS)
+              ) -> MR
+
+# combine YYYY, MM, DD, hh into a new variable datetime
+library(lubridate)
+MR$datetime = make_datetime(MR$YYYY, MR$MM, MR$DD, MR$hh)
+
+# mark the unusual value to be missing value
+MR$WD[MR$WD >= 999] = NA
+MR$WSPD[MR$WSPD >= 99] = NA
+MR$GSP[MR$GSP >= 99] = NA
+MR$BAR[MR$BAR >= 9999] = NA
+MR$ATMP[MR$ATMP >= 99] = NA
+MR$WTMP[MR$WTMP >= 99] = NA
+
+# change MM from integer to factor
+MR$MM = factor(MR$MM, levels = 1:12, labels = month.abb)
+
+# save the new data
+dat = MR[, c("YYYY","MM","DD","datetime","ATMP","WTMP")]
+save(dat, file = "./dat.Rdata")
+```
+
+```{r}
+# show the data (first 100 observations)
+# load the dataset
+load("./dat.Rdata")
+library(DT)
+datatable(dat[1:100,])
+```
+
+
+### Data analysis on Air temperature
+
+In this section, the yearly average Air temperature and monthly average Air temperature are been calculated. Then the scatterplot of *temperature vs time* are been drawn. After this, linear regression model and Pearson's correlation test are been taken to check whether there exists statistical significant evidence of global warming.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# ATMP
+# find mean value
+dat %>% 
+  group_by(YYYY) %>%
+  summarise(mean_ATMP = mean(ATMP, na.rm=T),
+            mean_WTMP = mean(WTMP, na.rm=T)) -> dat1
+
+dat1 %>% 
+  ggplot(aes(x = YYYY, y = mean_ATMP)) +
+  geom_point() +
+  geom_smooth() +
+  labs(title="Average Air Temperature of Year",x="year",y="Temperature")
+
+```
+
+
+It can be notice that the temperature of 1987 is much lower that the other years. The reason is that the only data of 1987 was recorded in December. Therefore the comparation is unfair.
+
+To fix this, the data of year 1987 is been removed, now the graph is like this:
+
+```{r}
+dat1 %>% 
+  filter(YYYY > 1987) %>%
+  ggplot(aes(x = YYYY, y = mean_ATMP)) +
+  geom_point() +
+  geom_smooth() +
+  labs(title="Average Air Temperature of Year",x="year",y="Temperature")
+```
+
+Linear regression model and Pearson correlation test are been used to test the relation between ATMP and year.
+```{r}
+summary(lm(mean_ATMP ~ YYYY, data = dat1[-1,]))
+with(dat1[-1,], cor.test(mean_ATMP, YYYY))
+```
+
+The result shows that:
++ coefficients are Negative very close to ZERO
++ the corresponding p-values are greater than 0.05
+
+Therefore, there exists NO statistical significant evidence of the increasing of air temperature for this data.
+
+
+The monthly average ATMP is also been studyed
+```{r}
+# monthly mean value
+dat %>% 
+  group_by(YYYY, MM) %>%
+  summarise(mean_ATMP = mean(ATMP, na.rm=T),
+            max_ATMP = max(ATMP, na.rm=T),
+            min_ATMP = min(ATMP, na.rm=T),
+            mean_WTMP = mean(WTMP, na.rm=T),
+            max_WTMP = max(WTMP, na.rm=T),
+            min_WTMP = min(WTMP, na.rm=T)
+            ) -> dat2
+
+dat2 %>% 
+  ggplot(aes(x = YYYY, y = mean_ATMP, color = MM)) +
+  geom_point() +
+  geom_smooth() +
+  labs(title="Average Water Temperature of Month",x="Year", y="average ATMP") +
+  facet_wrap(~MM)
+
+# Max and Min monthly Water Temperature
+dat2 %>%
+  ggplot(aes(x = YYYY, y = max_ATMP, group = MM, color = MM)) +
+  geom_line() +
+  geom_line(aes(x = YYYY, y = min_ATMP, group = MM)) +
+  facet_wrap(~MM) +
+  labs(title = "Max and min ATMP for each month", x="year",y="average ATMP")
+
+```
+
+Again, NO statistical significant evidence of the increasing of air temperature can be found.
+
+
+### Data analysis on Water temperature
+
+In this section, the yearly average Water temperature and monthly average Water temperature are been calculated. Then the scatterplot of *temperature vs time* are been drawn. After this, linear regression model and Pearson's correlation test are been taken to check whether there exists statistical significant evidence of global warming.
+
+```{r}
+dat1 %>% 
+  filter(YYYY > 1987) %>%
+  ggplot(aes(x = YYYY, y = mean_WTMP)) +
+  geom_point() +
+  geom_smooth() +
+  labs(title="Average Water Temperature of Year",x="year",y="Temperature")
+```
+
+Linear regression model and Pearson correlation test are been used to test the relation between WTMP and year.
+
+```{r}
+summary(lm(mean_WTMP ~ YYYY, data = dat1[-1,]))
+with(dat1[-1,], cor.test(mean_WTMP, YYYY))
+```
+
+The result shows that:
+
++ coefficients are positive but very close to ZERO
++ the corresponding p-values are greater than 0.05
+
+Therefore, there exists NO statistical significant evidence of the increasing of air temperature for this data.
+
+
+The monthly WTMP is also been studyed
+
+```{r}
+# monthly average Water Temperature
+dat2 %>% 
+  ggplot(aes(x = YYYY, y = mean_WTMP, color = MM)) +
+  geom_point() +
+  geom_smooth() +
+  labs(title="Average Water Temperature of Month",x="Year", y="average WTMP") +
+  facet_wrap(~MM)
+
+# Max and Min monthly Water Temperature
+dat2 %>%
+  ggplot(aes(x = YYYY, y = max_WTMP, group = MM, color = MM)) +
+  geom_line() +
+  geom_line(aes(x = YYYY, y = min_WTMP, group = MM)) +
+  facet_wrap(~MM) +
+  labs(title = "Max and min Water Temperature for each month", x="year",y="average WTMP")
+
+```
+
+Again, NO statistical significant evidence of the increasing of air temperature can be found.
+
+### Conclusion
+Base on the analysis the data collected by Boston buoy in the NOAA National Data Buoy Center, No significant evidence of global warming can be found.
+
++ The yearly avearge Air Temperature changes `r lm(mean_ATMP ~ YYYY, data = dat1[-1,])$coef[2]` degree Celsius per year, that is, the yearly average Air Temperature is slightly decreasing.
++ The corresponding p-value is greater than 0.05, thus this trend is NOT significant.
++ The yearly avearge Water Temperature changes `r lm(mean_WTMP ~ YYYY, data = dat1[-1,])$coef[2]` degree Celsius per year, that is, the yearly average Water Temperature is slightly increasing.
++ The corresponding p-value is greater than 0.05, thus this trend is NOT significant.
+
+
+
+
+
+
+
